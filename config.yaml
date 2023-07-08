@@ -1,0 +1,11 @@
+dev:
+  server:
+    addr: http://localhost
+    port: 8080
+
+  provider:
+    google:
+      issuer: https://accounts.google.com
+      clientId: id
+      clientSecret: secret
+      redirectUrl: http://localhost:8080/auth/login/google/callback
