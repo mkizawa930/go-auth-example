@@ -4,11 +4,15 @@ import (
 	"context"
 	"crypto/rand"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"oidc_example/config"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc"
@@ -19,19 +23,73 @@ import (
 //go:embed .secret_key
 var SECRET_KEY []byte
 
+type contextKey string
+
+const contextKeyForUserId contextKey = "user_id"
+
+func AuthenticateMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// authenticate
+		log.Println("AuthenticateMiddleware is called")
+		authorizationHeader := r.Header.Get("Authorization")
+		if authorizationHeader == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			respondError(w, http.StatusUnauthorized, errors.New("access_token not found"))
+			return
+		}
+		bearerString := strings.Split(authorizationHeader, " ")
+
+		if len(bearerString) != 2 {
+			log.Println(bearerString)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		signedString := bearerString[1]
+		auth, err := Parse(signedString)
+		log.Printf("%v", signedString)
+		if err != nil {
+			respondError(w, http.StatusUnauthorized, err)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		ctx := context.WithValue(r.Context(), contextKeyForUserId, auth.UserId)
+		r = r.WithContext(ctx)
+		fmt.Println("authorized!")
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	config.New()
 
 	r := chi.NewRouter()
-	r.Get("/{param}", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"param": chi.URLParam(r, "param")})
-	})
-	r.Get("/auth/login/{provider}", LoginHandler)
-	r.Get("/auth/login/{provider}/callback", CallbackHandler)
 
-	http.ListenAndServe(":8080", r)
+	r.Route("/", func(r chi.Router) {
+		r.Get("/{param}", func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]string{"param": chi.URLParam(r, "param")})
+		})
+	})
+
+	r.Route("/auth", func(r chi.Router) {
+		r.Get("/login/{provider}", LoginHandler)
+		r.Get("/login/{provider}/callback", CallbackHandler)
+	})
+
+	r.Route("/protected", func(r chi.Router) {
+		r.Use(AuthenticateMiddleware)
+		r.Get("/hello", HelloHandler)
+	})
+
+	err := http.ListenAndServe(":8080", r)
+	log.Fatal(err)
 }
 
+func HelloHandler(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(map[string]string{"message": "Hello, welcome!"})
+	w.WriteHeader(http.StatusOK)
+}
+
+// ログインハンドラ
 func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	providerName := chi.URLParam(r, "provider")
@@ -45,23 +103,45 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		log.Println("oauth2Configの取得に失敗しました")
 	}
 
-	state, err := randomString(32)
+	state, err := randomString(16)
 	if err != nil {
 		log.Fatal(err)
 	}
-	url := oauth2Config.AuthCodeURL(state)
-	err = json.NewEncoder(w).Encode(map[string]string{"redirectUrl": url})
+	nonce, err := randomString(16)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+		log.Fatal(err)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	fmt.Printf("state=%v, nonce=%v", state, nonce)
+	setCallbackCookie(w, r, "state", state)
+	setCallbackCookie(w, r, "nonce", nonce)
+
+	http.Redirect(w, r, oauth2Config.AuthCodeURL(state, oidc.Nonce(nonce)), http.StatusFound)
 }
 
+// コールバックハンドラ
 func CallbackHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	code := r.URL.Query().Get("code")
-	ok, err := Authenticate(ctx, "google", code)
+
+	fmt.Println(r.Cookies())
+
+	state, err := r.Cookie("state")
+	if err != nil {
+		http.Error(w, "state not found", http.StatusBadRequest)
+		return
+	}
+
+	nonce, err := r.Cookie("nonce")
+	if err != nil {
+		http.Error(w, "nonce not found", http.StatusBadRequest)
+		return
+	}
+	if r.URL.Query().Get("state") != state.Value {
+		http.Error(w, "state did not match", http.StatusBadRequest)
+		return
+	}
+
+	ok, err := Authenticate(ctx, "google", code, nonce.Value)
 	if err != nil {
 		log.Println(err)
 		return
@@ -81,7 +161,8 @@ func CallbackHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, resp)
 }
 
-func Authenticate(ctx context.Context, providerName string, code string) (bool, error) {
+// OpenIDによる認証を行う
+func Authenticate(ctx context.Context, providerName string, code, nonce string) (bool, error) {
 	providerConfig, err := config.GetProviderConfig(providerName)
 	if err != nil {
 		return false, err
@@ -108,10 +189,15 @@ func Authenticate(ctx context.Context, providerName string, code string) (bool, 
 	if !ok {
 		log.Fatal("error")
 	}
+	log.Println(rawIdToken)
 
 	idToken, err := verifier.Verify(ctx, rawIdToken)
 	if err != nil {
 		log.Fatal(err)
+	}
+	// nonceのチェック
+	if idToken.Nonce != nonce {
+		return false, errors.New("nonceが一致しません")
 	}
 
 	var claims struct {
@@ -125,9 +211,11 @@ func Authenticate(ctx context.Context, providerName string, code string) (bool, 
 	return true, nil
 }
 
+// jwtトークンを生成する
 func GenerateToken() (string, error) {
+	userId := "12345"
 	claims := jwt.MapClaims{
-		"user_id": 12345,
+		"user_id": userId,
 		"exp":     time.Now().Add(time.Hour * 24).Unix(),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -141,12 +229,55 @@ func GenerateToken() (string, error) {
 	return tokenString, nil
 }
 
+// トークンから取得したユーザー情報
+type Auth struct {
+	UserId string
+}
+
+// jwtトークンをparseする
+func Parse(signedString string) (*Auth, error) {
+	token, err := jwt.Parse(signedString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return "", fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return SECRET_KEY, nil
+	})
+
+	if err != nil {
+		if ve, ok := err.(*jwt.ValidationError); ok {
+			if ve.Errors&jwt.ValidationErrorExpired != 0 {
+				return nil, fmt.Errorf("%s is expired", signedString)
+			} else {
+				return nil, fmt.Errorf("%s is invalid", signedString)
+			}
+		} else {
+			return nil, err
+		}
+	}
+
+	if token == nil {
+		return nil, err
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, errors.New("error when parsing token claims")
+	}
+
+	userId, ok := claims["user_id"].(string)
+	if !ok {
+		return nil, errors.New("user_id not found")
+	}
+
+	return &Auth{UserId: userId}, nil
+}
+
+// 長さnのランダム文字列(URLエンコード)を生成する
 func randomString(n int) (string, error) {
 	var b = make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	return string(b), nil
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 func respondJSON(w http.ResponseWriter, status int, body interface{}) {
@@ -156,6 +287,17 @@ func respondJSON(w http.ResponseWriter, status int, body interface{}) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}
 	w.WriteHeader(status)
+}
+
+func setCallbackCookie(w http.ResponseWriter, r *http.Request, name, value string) {
+	c := &http.Cookie{
+		Name:     name,
+		Value:    value,
+		MaxAge:   int(time.Hour.Seconds()),
+		Secure:   r.TLS != nil,
+		HttpOnly: true,
+	}
+	http.SetCookie(w, c)
 }
 
 // func generateToken() {

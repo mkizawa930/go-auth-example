@@ -14,7 +14,12 @@ import (
 var (
 	appConfig         *AppConfig
 	providerConfigMap map[string]*ProviderConfig
+	verifierMap       map[string]*oidc.IDTokenVerifier
 )
+
+func init() {
+	verifierMap = make(map[string]*oidc.IDTokenVerifier)
+}
 
 func New() {
 	// load config.yaml
@@ -45,6 +50,11 @@ func loadYaml() map[string]Config {
 	}
 
 	return m
+}
+
+// 初期セットアップ時実行関数
+func Setup() {
+
 }
 
 type Config struct {
@@ -99,4 +109,20 @@ func GetOAuth2Config(ctx context.Context, providerName string, config *ProviderC
 		RedirectURL:  config.RedirectUrl,
 		Scopes:       []string{oidc.ScopeOpenID, "email", "profile"},
 	}, nil
+}
+
+func SetVerifier(provider string, verifier *oidc.IDTokenVerifier) bool {
+	if _, ok := verifierMap[provider]; !ok {
+		verifierMap[provider] = verifier
+		return true
+	}
+	return false
+}
+
+func GetVerifier(provider string) (*oidc.IDTokenVerifier, error) {
+	verifier, ok := verifierMap[provider]
+	if !ok {
+		return nil, fmt.Errorf("verifier for %v is not found", provider)
+	}
+	return verifier, nil
 }
