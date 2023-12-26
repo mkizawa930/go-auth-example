@@ -1,11 +1,1 @@
-dev:
-  server:
-    addr: http://localhost
-    port: 8080
 
-  provider:
-    google:
-      issuer: https://accounts.google.com
-      clientId: 867871757013-i55s98n7ij86idk5ajuk5pmg26i183if.apps.googleusercontent.com
-      clientSecret: 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
-      redirectUrl: http://localhost:8080/auth/login/google/callback
