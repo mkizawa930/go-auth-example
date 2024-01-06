@@ -6,12 +6,12 @@ import (
 )
 
 type ErrorResponse struct {
-	ErrorMessage string `json:"errorMessage"`
+	Error string `json:"error"`
 }
 
 func respondError(w http.ResponseWriter, status int, err error) {
 	body := ErrorResponse{
-		ErrorMessage: err.Error(),
+		Error: err.Error(),
 	}
 	err = json.NewEncoder(w).Encode(body)
 	if err != nil {

@@ -1,13 +1,29 @@
-package config
+package main
 
-import "testing"
+import (
+	"testing"
 
-func TestConfig(t *testing.T) {
-	want := 1
-	got := 1
-	if want != got {
+	"github.com/go-playground/assert"
+)
+
+func Test_ServerConfig(t *testing.T) {
+	cfg := ServerConfig{Host: "localhost", Port: 8080}
+	assert.Equal(t, cfg.Addr(), "localhost:8080")
+}
+
+func Test_LoadConfig(t *testing.T) {
+	LoadConfig()
+
+	if cfg == nil {
 		t.Fail()
 	}
+
+	googleConfig, ok := providerConfigMap["google"]
+	if !ok {
+		t.Fail()
+	}
+	t.Log(googleConfig.Scopes)
+	assert.Equal(t, len(googleConfig.Scopes), 3)
 }
 
 // func TestGetProviderConfig(t *testing.T) {

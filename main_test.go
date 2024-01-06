@@ -2,7 +2,7 @@ package main
 
 import "testing"
 
-func TestRandomString(t *testing.T) {
+func Test_RandomString(t *testing.T) {
 	b, err := randomString(32)
 	if err != nil {
 		t.Log(err)
