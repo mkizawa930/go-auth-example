@@ -14,7 +14,7 @@ import (
 func NewLoggerMiddleware(logger *slog.Logger) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			log.Println("LoggerMiddleware is called")
+			slog.Info("LoggerMiddleware called")
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -24,8 +24,8 @@ func NewLoggerMiddleware(logger *slog.Logger) Middleware {
 func NewAuthMiddleware(c *Config) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// authenticate
-			log.Println("AuthenticateMiddleware is called")
+			slog.Info("AuthMiddleware called")
+
 			authorizationHeader := r.Header.Get("Authorization")
 			if authorizationHeader == "" {
 				w.WriteHeader(http.StatusUnauthorized)

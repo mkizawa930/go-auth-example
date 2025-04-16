@@ -7,32 +7,39 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+
+	"github.com/joho/godotenv"
 )
 
 type loggerCtxKey struct{}
 
 func init() {
-	// TODO:
+	if err := godotenv.Load(); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func main() {
-	c := new(Config) // TODO
-
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	slogHandlerOpts := &slog.HandlerOptions{Level: slog.LevelDebug}
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, slogHandlerOpts))
 	slog.SetDefault(logger)
-	slog.Debug("start main")
-	LoadConfig()
+
+	//
+	c, err := InitConfig()
+	if err != nil {
+		logger.Error(err.Error())
+		log.Fatal(err)
+	}
 
 	loggerMiddleware := NewLoggerMiddleware(logger)
 	authMiddleware := NewAuthMiddleware(c)
 
-	callbackHandler := NewCallbackHandlerFunc(c)
 	authHandler := NewAuthHandler(c)
+	authCallbackHandler := NewAuthCallbackHandlerFunc(c)
 
-	router := NewRouter(loggerMiddleware, authMiddleware, authHandler, callbackHandler)
+	router := NewRouter(loggerMiddleware, authMiddleware, authHandler, authCallbackHandler)
 
-	addr := c.Addr()
-	slog.Info(fmt.Sprintf("start listening on %s", addr))
+	fmt.Printf("start listening: %s\n", c.Addr())
 
 	// start servers
 	log.Fatal(http.ListenAndServe(c.Addr(), router))

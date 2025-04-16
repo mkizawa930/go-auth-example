@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 )
@@ -23,7 +24,9 @@ func respondJSON(w http.ResponseWriter, status int, body interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	err := json.NewEncoder(w).Encode(body)
 	if err != nil {
+		slog.Error(err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(status)
 }

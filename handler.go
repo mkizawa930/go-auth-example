@@ -33,7 +33,7 @@ func NewAuthHandler(c *Config) http.HandlerFunc {
 			return
 		}
 
-		oauth2Config, err := c.NewOAuth2Config(ctx, providerName)
+		oauth2Config, err := NewOAuth2Config(ctx, c, providerName)
 		if err != nil {
 			slog.Error(err.Error())
 			respondError(w, http.StatusInternalServerError, nil)
@@ -63,7 +63,7 @@ func NewAuthHandler(c *Config) http.HandlerFunc {
 }
 
 // コールバックハンドラ
-func NewCallbackHandlerFunc(c *Config) http.HandlerFunc {
+func NewAuthCallbackHandlerFunc(c *Config) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
@@ -74,7 +74,6 @@ func NewCallbackHandlerFunc(c *Config) http.HandlerFunc {
 
 		providerName := chi.URLParam(r, "provider")
 		code := r.URL.Query().Get("code") // 認可コード
-		slog.Debug("authCode", "code", code)
 
 		state, err := r.Cookie("state")
 		if err != nil {

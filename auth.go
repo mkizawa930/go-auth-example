@@ -5,11 +5,57 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"log/slog"
 	"time"
 
 	"github.com/golang-jwt/jwt"
 )
+
+// 認可コードを使った認証フローの実装
+// 1. 認可コードを受取り、IDプロバイダへ認可コードを送信し、IDトークンを受け取る
+// 2. 受け取ったIDトークンを検証する
+func Authenticate(ctx context.Context, c *Config, providerName string, code string, nonce string) (map[string]any, error) {
+
+	// get oauth2 config
+	oauth2Config, err := NewOAuth2Config(ctx, c, providerName)
+	if err != nil {
+		return nil, err
+	}
+
+	// exchange auth code
+	token, err := oauth2Config.Exchange(ctx, code)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	rawIdToken, ok := token.Extra("id_token").(string)
+	if !ok {
+		return nil, errors.New("failed to get id_token")
+	}
+
+	// get token verifier
+	verifier, err := NewIdTokenVerifier(ctx, c, providerName)
+	if err != nil {
+		return nil, err
+	}
+
+	// idトークンの検証
+	idToken, err := verifier.Verify(ctx, rawIdToken)
+	if err != nil {
+		return nil, err
+	}
+
+	// nonceのチェック
+	if idToken.Nonce != nonce {
+		return nil, errors.New("nonceが一致しません")
+	}
+
+	var claims = make(map[string]any)
+	if err := idToken.Claims(&claims); err != nil {
+		return nil, err
+	}
+
+	return claims, nil
+}
 
 // jwtトークンを生成する
 func GenerateToken(c *Config, email string) (string, error) {
@@ -25,54 +71,6 @@ func GenerateToken(c *Config, email string) (string, error) {
 		return "", err
 	}
 	return tokenString, nil
-}
-
-// 認可コードを使った認証フローの実装
-// 1. 認可コードを受取り、IDプロバイダへ認可コードを送信し、IDトークンを受け取る
-// 2. 受け取ったIDトークンを検証する
-func Authenticate(ctx context.Context, c *Config, providerName string, code string, nonce string) (map[string]any, error) {
-	// get oauth2 config
-	oauth2Config, err := c.NewOAuth2Config(ctx, providerName)
-	if err != nil {
-		return nil, err
-	}
-
-	// exchange auth code
-	token, err := oauth2Config.Exchange(ctx, code)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	rawIdToken, ok := token.Extra("id_token").(string)
-	if !ok {
-		log.Fatal("error")
-	}
-
-	// get token verifier
-	verifier, err := c.NewIdTokenVerifier(ctx, providerName)
-	if err != nil {
-		return nil, err
-	}
-
-	// idトークンの検証
-	idToken, err := verifier.Verify(ctx, rawIdToken)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// nonceのチェック
-	if idToken.Nonce != nonce {
-		return nil, errors.New("nonceが一致しません")
-	}
-
-	var claims = make(map[string]any)
-	if err := idToken.Claims(claims); err != nil {
-		return nil, err
-	}
-
-	slog.Debug("claims", "%+v", claims)
-
-	return claims, nil
 }
 
 // jwtトークンをparseする
