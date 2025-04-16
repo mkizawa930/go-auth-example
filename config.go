@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 
@@ -13,18 +12,23 @@ import (
 	"golang.org/x/oauth2"
 )
 
-var (
-	cfg               *ServerConfig
-	providerConfigMap map[string]*ProviderConfig
-	oauth2ConfigMap   map[string]*oauth2.Config
-	verifierMap       map[string]*oidc.IDTokenVerifier
-)
-
-type ProviderName string
+type Provider string
 
 const (
-	Google string = "google"
+	ProviderGoogle string = "google"
 )
+
+type Config struct {
+	ServerHost        string `env:"SERVER_HOST"`
+	ServerPort        string `env:"SERVER_PORT"`
+	JwtSecretKey      string `env:"JWT_SECRET_KEY"`
+	ProviderConfigMap map[string]*ProviderConfig
+	ProviderMap       map[string]*oidc.Provider
+}
+
+func (c *Config) Addr() string {
+	return fmt.Sprintf("%s:%s", c.ServerHost, c.ServerPort)
+}
 
 type ServerConfig struct {
 	Host string `env:"SERVER_HOST"`
@@ -36,6 +40,7 @@ type ProviderConfig struct {
 	ClientSecret string
 	Issuer       string
 	RedirectUrl  string
+	Endpoint     oauth2.Endpoint
 	Scopes       []string
 }
 
@@ -46,13 +51,13 @@ func (c *ServerConfig) Addr() string {
 func LoadConfig() {
 	godotenv.Load()
 	// init ServerConfig
-	cfg = &ServerConfig{}
-	if err := env.Parse(cfg); err != nil {
+	c := new(Config)
+	if err := env.Parse(c); err != nil {
 		panic(err)
 	}
 
 	// init providerConfigMap
-	providerConfigMap = make(map[string]*ProviderConfig)
+	providerConfigMap := make(map[string]*ProviderConfig)
 
 	providers := []string{"google"}
 	for _, provider := range providers {
@@ -92,62 +97,59 @@ func LoadConfig() {
 	}
 }
 
-// type ProviderConfig struct {
-// 	ClientId     string
-// 	ClientSecret string
-// 	Issuer       string
-// 	RedirectUrl  string
-// }
-
-// ProviderConfigを取得する
-// func GetProviderConfig(providerName string) (*ProviderConfig, error) {
-// 	config, ok := providerConfigMap[providerName]
-// 	if !ok {
-// 		return nil, fmt.Errorf("%vというプロバイダ情報が見つかりません", providerName)
-// 	}
-// 	return config, nil
-// }
-
-// func GetOAuth2Config(ctx context.Context, providerName string) (*oauth2.Config, error) {
-// 	var err error
-// 	cfg, ok := providerConfigMap[providerName]
-// 	if !ok {
-// 		return nil, fmt.Errorf("provider config not found")
-// 	}
-
-// 	provider, err := oidc.NewProvider(ctx, cfg.GetIssuer())
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	return &oauth2.Config{
-// 		ClientID:     cfg.ClientId,
-// 		ClientSecret: cfg.ClientSecret,
-// 		Endpoint:     provider.Endpoint(),
-// 		RedirectURL:  cfg.RedirectUrl,
-// 		Scopes:       []string{oidc.ScopeOpenID, "email", "profile"},
-// 	}, nil
-// }
-
-func GetOAuth2Config(ctx context.Context, providerName string) (*oauth2.Config, error) {
-
-	cfg, ok := providerConfigMap[providerName]
+// OAuth2Configを取得する
+func (c *Config) NewOAuth2Config(ctx context.Context, key string) (*oauth2.Config, error) {
+	providerConfig, ok := c.ProviderConfigMap[key]
 	if !ok {
-		return nil, fmt.Errorf("%vの設定情報が見つかりません", providerName)
+		return nil, fmt.Errorf("プロバイダ設定が見つかりません: key=%s", key)
 	}
 
-	provider, err := oidc.NewProvider(ctx, cfg.Issuer)
-	if err != nil {
-		slog.Error(err.Error())
-		return nil, fmt.Errorf("oidc.Providerの作成に失敗しました")
-	}
+	// provider, err := oidc.NewProvider(context.Background(), providerConfig.Issuer)
+	// if err != nil {
+	// 	slog.Error(err.Error())
+	// 	return nil, fmt.Errorf("oidc.Providerの作成に失敗しました")
+	// }
 
 	return &oauth2.Config{
-		ClientID:     cfg.ClientID,
-		ClientSecret: cfg.ClientSecret,
-		Endpoint:     provider.Endpoint(),
-		RedirectURL:  cfg.RedirectUrl,
-		Scopes:       cfg.Scopes,
+		ClientID:     providerConfig.ClientID,
+		ClientSecret: providerConfig.ClientSecret,
+		Endpoint:     providerConfig.Endpoint, // TODO
+		RedirectURL:  providerConfig.RedirectUrl,
+		Scopes:       providerConfig.Scopes,
 	}, nil
+}
+
+func (c *Config) GetProvider(ctx context.Context, key string) (*oidc.Provider, error) {
+	provider, ok := c.ProviderMap[key]
+	if ok {
+		return provider, nil
+	}
+
+	providerConfig, ok := c.ProviderConfigMap[key]
+	if !ok {
+		return nil, fmt.Errorf("プロバイダ設定が見つかりません: key=%s", key)
+	}
+
+	provider, err := oidc.NewProvider(ctx, providerConfig.Issuer)
+	if err != nil {
+		return nil, fmt.Errorf("oidc.Providerの作成に失敗しました")
+	}
+	c.ProviderMap[key] = provider
+
+	return provider, nil
+}
+
+// TokenVerifierを取得する
+func (c *Config) NewIdTokenVerifier(ctx context.Context, key string) (*oidc.IDTokenVerifier, error) {
+	providerConfig, ok := c.ProviderConfigMap[key]
+	if !ok {
+		return nil, fmt.Errorf("プロバイダ設定が見つかりません: key=%s", key)
+	}
+	provider, err := c.GetProvider(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	return provider.Verifier(&oidc.Config{ClientID: providerConfig.ClientID}), nil
 }
 
 // func SetVerifier(provider string, verifier *oidc.IDTokenVerifier) bool {
@@ -157,17 +159,3 @@ func GetOAuth2Config(ctx context.Context, providerName string) (*oauth2.Config, 
 // 	}
 // 	return false
 // }
-
-func GetIDTokenVerifier(ctx context.Context, providerName string) (*oidc.IDTokenVerifier, error) {
-	cfg, ok := providerConfigMap[providerName]
-	if !ok {
-		return nil, fmt.Errorf(fmt.Sprintf("%sに関するプロバイダ情報が見つかりません", providerName))
-	}
-	provider, err := oidc.NewProvider(ctx, cfg.Issuer)
-	if err != nil {
-		slog.Error(err.Error())
-		return nil, fmt.Errorf("oidc.Providerの生成に失敗しました")
-	}
-
-	return provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}), nil
-}
