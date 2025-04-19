@@ -17,13 +17,13 @@ IDトークンの検証などに使用
 
 ## 起動
 
-`/auth/{provider}`: 認可コード発行URLの取得
-`/auth/{provider}/callback`: 認可コードを受け取るエンドポイント
+エンドポイント
 
+- `/auth/{provider}`: 認可コード発行URLの取得
+- `/auth/{provider}/callback`: 認可コードを受け取るエンドポイント
 
 ```
-go build . && ./oidc_example
-
+go build . && ./app
 ```
 
 
